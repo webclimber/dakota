@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Secrets and env
+.env
+.env.*
+secrets/
+*.pem
+*.key
+
+# Logs and runtime
+logs/
+reports/
+tmp/
+*.log
+*.pid
+
+# macOS
+.DS_Store
+
+# Local memory data
+memory/vector/
+memory/index/
+memory/cache/
+
+# Editor
+.vscode/
+.idea/
