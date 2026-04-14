@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+orjson
+python-dotenv
+langgraph
+langchain
+langchain-openai
+langchain-google-genai
+langchain-ollama
+jinja2
+pandas
+tabulate
+python-dateutil
+aiosqlite

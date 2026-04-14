@@ -1,0 +1,30 @@
+routing:
+  classify_fast:
+    provider: ollama
+    model: qwen2.5:7b
+
+  general_local:
+    provider: ollama
+    model: llama3.1:8b
+
+  synth_local:
+    provider: ollama
+    model: qwen2.5:14b
+
+  synth_remote_primary:
+    provider: openai
+    model: gpt-5.4
+
+  synth_remote_secondary:
+    provider: google
+    model: gemini-2.5-pro
+
+rules:
+  - when: short_extraction_or_tagging
+    use: classify_fast
+  - when: local_draft_or_cleanup
+    use: general_local
+  - when: longer_local_synthesis
+    use: synth_local
+  - when: multi-source_high-stakes_or_final_synthesis
+    use: synth_remote_primary

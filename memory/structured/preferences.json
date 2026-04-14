@@ -1,0 +1,7 @@
+{
+  "owner": "Reinaldo",
+  "approval_mode": "no external action without explicit authorization",
+  "delivery_channels": ["telegram", "email", "local_files"],
+  "priority_domains": ["politics", "tech", "science"],
+  "privacy_mode": "local_first_hybrid"
+}

@@ -1,0 +1,19 @@
+{
+    admin off
+    log {
+        output file /Users/dakota/dakota/logs/caddy-runtime.log
+        format console
+    }
+}
+
+dakota.home.arpa {
+    tls internal
+    encode zstd gzip
+
+    log {
+        output file /Users/dakota/dakota/logs/caddy-access.log
+        format console
+    }
+
+    reverse_proxy 127.0.0.1:8787
+}

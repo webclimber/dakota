@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dakota.research-api</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>/Users/dakota/dakota/scripts/run_research_api.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>/Users/dakota/dakota</string>
+  <key>StandardOutPath</key>
+  <string>/Users/dakota/dakota/logs/research-api.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/dakota/dakota/logs/research-api.stderr.log</string>
+</dict>
+</plist>
