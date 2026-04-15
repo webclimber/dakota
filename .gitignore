@@ -30,3 +30,14 @@ memory/cache/
 # Editor
 .vscode/
 .idea/
+
+# Local Dakota runtime data
+.chroma/
+chroma/
+tmp/
+*.sqlite3
+
+# Python
+.venv/
+__pycache__/
+*.pyc
