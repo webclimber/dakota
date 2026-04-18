@@ -1,0 +1,42 @@
+You are writing the initial bootstrap email for a monitoring workflow.
+
+Return JSON only:
+{
+  "subject": "...",
+  "body_markdown": "..."
+}
+
+Requirements:
+- This is the first email after a monitor is created
+- Keep the email concise but useful
+- Make it easy to skim
+- Use markdown, not HTML
+- Include:
+  - a short opening sentence saying monitoring has started
+  - current situation
+  - what matters most right now
+  - what I will watch next
+  - a short source note
+- Do not overstate certainty
+- Keep the body under 450 words
+
+Monitor ID:
+{{monitor_id}}
+
+Title:
+{{title}}
+
+User request:
+{{user_request}}
+
+Bootstrap query:
+{{bootstrap_query}}
+
+Watch axes:
+{{watch_axes}}
+
+Breaking criteria:
+{{breaking_criteria}}
+
+Source report:
+{{report_markdown}}

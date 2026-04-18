@@ -1,0 +1,16 @@
+{
+  "timezone": "America/Los_Angeles",
+  "monitor_mode": "balanced",
+  "check_frequency_minutes": 60,
+  "importance_thresholds": {
+    "telegram_breaking_min": 85,
+    "digest_include_min": 55
+  },
+  "initial_brief": {
+    "enabled": true,
+    "refinement_passes": 2
+  },
+  "budget": {
+    "max_external_spend_usd": 25
+  }
+}

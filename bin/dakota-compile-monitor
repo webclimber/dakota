@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+source "$HOME/dakota/.venv/bin/activate"
+cd "$HOME/dakota"
+python scripts/dakota_compile_monitor.py "$@"

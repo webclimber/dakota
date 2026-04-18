@@ -1,0 +1,39 @@
+You are extracting baseline state for a monitor.
+
+Return JSON only in this format:
+{
+  "baseline_facts": [
+    "..."
+  ],
+  "key_entities": [
+    {"name": "...", "type": "candidate|institution|country|topic|other"}
+  ],
+  "key_risks": [
+    "..."
+  ],
+  "what_to_watch_next": [
+    "..."
+  ],
+  "source_notes": [
+    "..."
+  ]
+}
+
+Requirements:
+- Keep baseline_facts factual and specific
+- Extract 4 to 8 key entities
+- key_risks should focus on meaningful ways the situation could change
+- what_to_watch_next should align with daily monitoring
+- source_notes should be short and practical
+
+Topic:
+{{topic}}
+
+Watch axes:
+{{watch_axes}}
+
+Breaking criteria:
+{{breaking_criteria}}
+
+Bootstrap report:
+{{report_markdown}}
