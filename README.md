@@ -21,7 +21,6 @@ Dakota does not initiate work. River SSHs in, runs a script, and SCPs back the r
 | FastAPI research API | `com.dakota.research-api` | Running (`localhost:8787`) |
 | Caddy reverse proxy | `com.dakota.caddy` | Running |
 | Ollama | `com.dakota.ollama` | Not running (launchd exit 1) |
-| Daily usage report | `com.dakota.daily-usage-report` | Not running (launchd exit 127) |
 
 Manage via launchctl: `launchctl kickstart -k gui/$(id -u)/com.dakota.research-api`
 
@@ -35,8 +34,6 @@ Manage via launchctl: `launchctl kickstart -k gui/$(id -u)/com.dakota.research-a
 Ollama is installed but not currently running.
 
 ## Scripts Called by River
-
-These are the scripts River invokes via SSH as part of its pipelines:
 
 | Script | Called by | Purpose |
 |--------|-----------|---------|
@@ -57,21 +54,25 @@ River SCPs results back from `reports/monitors/<id>/` after each check.
 | `scripts/dakota_history.py` | Historical data queries |
 | `scripts/dakota_smoke.py` | Smoke test for API + model connectivity |
 
+## Usage Tracking
+
+Dakota's LLM usage is logged to `logs/usage.jsonl` (one record per API call). River's nightly usage report SSHes to Dakota and pulls this file — Dakota costs appear in River's "Automation Cost by Day" email alongside other pipelines. No separate Dakota usage report runs.
+
 ## Directory Layout
 
 ```
 /Users/dakota/dakota/
 ├── scripts/          # All Python scripts (see above)
 ├── config/           # Prompts, monitor defaults, settings
-├── memory/
+├── memory/           # Runtime state — gitignored
 │   ├── structured/   # preferences.json (owner, approval mode, delivery prefs)
-│   └── monitor_specs/ # Compiled spec JSONs per monitor
+│   └── monitor_specs/ # Compiled spec JSONs per monitor (runtime, not source)
 ├── reports/
 │   └── monitors/<id>/ # latest_event.json, run reports
 ├── chroma/           # ChromaDB vector store
 ├── logs/             # usage.jsonl (LLM call log), service logs
 ├── agents/research/  # Research agent state
-├── bin/              # Helper scripts (dakota-compile-monitor, etc.)
+├── bin/              # Helper scripts
 ├── launchd/          # LaunchAgent plists
 ├── .env              # API keys + model config (not in git)
 └── requirements.txt
@@ -81,9 +82,9 @@ River SCPs results back from `reports/monitors/<id>/` after each check.
 
 | Path | Purpose |
 |------|---------|
-| `memory/monitor_specs/` | One JSON per compiled monitor spec |
+| `memory/monitor_specs/` | One JSON per compiled monitor spec (runtime, not committed) |
 | `reports/monitors/<id>/latest_event.json` | Most recent check result (River SCPs this) |
-| `logs/usage.jsonl` | LLM call log — input/output tokens per invocation |
+| `logs/usage.jsonl` | LLM call log — pulled nightly by River's usage harvest |
 | `chroma/` | ChromaDB embeddings store |
 
 ## Connectivity Check
@@ -99,6 +100,4 @@ curl http://127.0.0.1:8787/health
 ## Known Issues
 
 - Ollama not running (launchd exit 1) — local model fallback unavailable
-- `com.dakota.daily-usage-report` exits 127 (command not found) — likely broken venv path in plist
 - `independent_research_worker.py` not yet deployed — River falls back to local summarization for Phase 3
-- Monitor spec files accumulate in `memory/monitor_specs/` with no cleanup
