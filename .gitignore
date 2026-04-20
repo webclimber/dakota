@@ -23,9 +23,7 @@ tmp/
 .DS_Store
 
 # Local memory data
-memory/vector/
-memory/index/
-memory/cache/
+memory/
 
 # Editor
 .vscode/
