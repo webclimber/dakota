@@ -101,6 +101,13 @@ def call_openai_json(client: OpenAI, model: str, prompt: str) -> Tuple[Dict[str,
     return data, usage_record
 
 
+def _acc(accumulated: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(accumulated)
+    for k in ("input_tokens", "output_tokens", "total_tokens"):
+        result[k] = (result.get(k) or 0) + (new.get(k) or 0)
+    return result
+
+
 def build_prompt(template: str, variables: Dict[str, str]) -> str:
     text = template
     for key, value in variables.items():
@@ -187,6 +194,7 @@ def main() -> None:
     print("\n== Generating Email Brief ==")
     email_prompt = build_prompt(email_template, variables)
     email_data, email_usage = call_openai_json(client, model, email_prompt)
+    total_usage = dict(email_usage)
     append_usage_log(project_root, {
         "timestamp": datetime.now().isoformat(),
         "kind": "openai_bootstrap_email",
@@ -210,6 +218,9 @@ def main() -> None:
         critique_resp = client.responses.create(model=model, input=critique_prompt)
         critique = critique_resp.output_text.strip()
         critique_notes.append(critique)
+        _cu = getattr(critique_resp, "usage", None)
+        critique_usage_rec = {"input_tokens": getattr(_cu, "input_tokens", 0) or 0, "output_tokens": getattr(_cu, "output_tokens", 0) or 0, "total_tokens": getattr(_cu, "total_tokens", 0) or 0}
+        total_usage = _acc(total_usage, critique_usage_rec)
         append_usage_log(project_root, {
             "timestamp": datetime.now().isoformat(),
             "kind": "openai_bootstrap_email_critique",
@@ -245,6 +256,7 @@ SOURCE REPORT:
 {report_markdown[:14000]}
 """.strip()
         revised_email_data, revise_usage = call_openai_json(client, model, revise_prompt)
+        total_usage = _acc(total_usage, revise_usage)
         append_usage_log(project_root, {
             "timestamp": datetime.now().isoformat(),
             "kind": "openai_bootstrap_email_revise",
@@ -259,6 +271,7 @@ SOURCE REPORT:
     print("\n== Generating Bootstrap State ==")
     state_prompt = build_prompt(state_template, variables)
     state_data, state_usage = call_openai_json(client, model, state_prompt)
+    total_usage = _acc(total_usage, state_usage)
     append_usage_log(project_root, {
         "timestamp": datetime.now().isoformat(),
         "kind": "openai_bootstrap_state",
@@ -280,6 +293,7 @@ SOURCE REPORT:
         "critique_notes": critique_notes,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "source_report": str(report_path.relative_to(project_root)),
+        "llm_usage": {"model": model, **total_usage},
     }
     save_json(out_dir / "bootstrap_email.json", email_json)
     save_json(out_dir / "bootstrap_state.json", state_data)

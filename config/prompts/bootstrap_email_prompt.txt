@@ -10,15 +10,26 @@ Requirements:
 - This is the first email after a monitor is created
 - Keep the email concise but useful
 - Make it easy to skim
-- Use markdown, not HTML
-- Include:
-  - a short opening sentence saying monitoring has started
-  - current situation
-  - what matters most right now
-  - what I will watch next
-  - a short source note
 - Do not overstate certainty
-- Keep the body under 450 words
+- Keep the body under 1200 words
+
+Use EXACTLY this markdown structure in body_markdown (use ## for section headings, proper bullet lists):
+
+Monitoring has started for [title].
+
+## Current situation
+- [bullet]
+- [bullet]
+
+## What matters most right now
+- [bullet]
+- [bullet]
+
+## What I will watch next
+- [bullet]
+- [bullet]
+
+**Source note:** [one sentence naming the main source types used]
 
 Monitor ID:
 {{monitor_id}}

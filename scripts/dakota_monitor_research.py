@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import re
@@ -43,7 +44,7 @@ if not query:
 
 now = datetime.now()
 run_id = now.strftime('run-%Y%m%d-%H%M%S')
-MODEL = "qwen2.5:7b"
+MODEL = os.environ.get("OLLAMA_SUMMARIZE_MODEL", "qwen3:32b")
 QUERY_TERMS = {t.lower() for t in re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]+", query) if len(t) >= 4}
 
 llm = ChatOllama(model=MODEL)
@@ -131,7 +132,14 @@ def fetch_source(source: dict) -> dict:
         score -= 12; result["notes"].append("thin page")
 
     domain = result["domain"].lower()
-    trusted_news = ("apnews.com", "reuters.com", "bbc.com", "abcnews.go.com", "abcnews.com", "elpais.com", "elcomercio.pe", "rpp.pe", "theguardian.com", "aljazeera.com")
+    trusted_news = (
+        "apnews.com", "reuters.com", "bbc.com", "abcnews.go.com", "abcnews.com",
+        "elpais.com", "elmundo.es", "abc.es", "lavanguardia.com", "elperiodico.com",
+        "elcomercio.pe", "rpp.pe", "theguardian.com", "aljazeera.com",
+        "sur.es", "surinenglish.com", "laopiniondemalaga.es", "malagahoy.es",
+        "marbella24.com", "diariodecadiz.es", "diariodesevilla.es",
+        "granadahoy.com", "ideal.es", "lavozdealmeria.es",
+    )
     official = (".gob.pe", ".gov", ".org")
     if any(d in domain for d in trusted_news):
         score += 12; result["notes"].append("trusted news")
@@ -146,7 +154,7 @@ def fetch_source(source: dict) -> dict:
     return result
 
 
-def select_diverse_sources(ranked: list, max_sources: int = 4) -> list:
+def select_diverse_sources(ranked: list, max_sources: int = 6) -> list:
     selected = []
     domain_counts = {}
     for item in ranked:
@@ -162,19 +170,94 @@ def select_diverse_sources(ranked: list, max_sources: int = 4) -> list:
             break
     return selected
 
-print("== Discovery ==")
-raw = discover(query)
-try:
-    data = json.loads(raw)
-except Exception as e:
-    print(f"Failed to parse discovery JSON: {e}")
-    sys.exit(1)
-summary = data.get("summary", "")
-sources = data.get("sources", [])
-print(f"\n== Fetching and scoring {len(sources)} source(s) ==")
+
+_SPANISH_LOCAL_DOMAINS = {
+    "marbella":  ["sur.es", "surinenglish.com", "laopiniondemalaga.es", "malagahoy.es", "marbella24.com"],
+    "málaga":    ["sur.es", "surinenglish.com", "laopiniondemalaga.es", "malagahoy.es"],
+    "malaga":    ["sur.es", "surinenglish.com", "laopiniondemalaga.es", "malagahoy.es"],
+    "sevilla":   ["diariodesevilla.es", "elcorreoweb.es", "abc.es"],
+    "granada":   ["granadahoy.com", "ideal.es"],
+    "cadiz":     ["diariodecadiz.es", "lavozdigital.es"],
+    "almeria":   ["lavozdealmeria.es", "ideal.es"],
+    "madrid":    ["elmundo.es", "elpais.com", "20minutos.es"],
+    "barcelona": ["lavanguardia.com", "elperiodico.com", "ara.cat"],
+}
+
+_AXIS_ES = {
+    "regulation": "regulaciones normativas",
+    "weather":    "tiempo meteorología",
+    "infra":      "infraestructura obras",
+    "transport":  "transporte tráfico",
+    "tourism":    "turismo hostelería",
+    "housing":    "vivienda alquiler",
+    "community":  "vecinos calidad vida",
+    "municipal":  "ayuntamiento noticias",
+    "project":    "proyectos inversión",
+}
+
+
+def generate_supplemental_queries(main_query: str, spec: dict) -> list:
+    title = (spec.get("title") or "").lower()
+    watch_axes = spec.get("watch_axes") or []
+
+    local_domains = []
+    location_display = []
+    for place, domains in _SPANISH_LOCAL_DOMAINS.items():
+        if place in title:
+            local_domains = domains
+            location_display.append(place.replace("á", "á").capitalize())
+
+    if not local_domains:
+        return []
+
+    # Spanish axis keywords from watch_axes
+    spanish_terms = []
+    for axis in watch_axes[:4]:
+        for key, esp in _AXIS_ES.items():
+            if key in axis.lower():
+                spanish_terms.append(esp.split()[0])
+                break
+
+    loc = " ".join(location_display[:2]) or "local"
+    axes_str = " ".join(spanish_terms[:2]) if spanish_terms else "noticias"
+
+    q_spanish = f"{loc} noticias locales {axes_str} esta semana"
+    site_expr = " OR ".join(f"site:{d}" for d in local_domains[:4])
+    q_site = f"{loc} local news ({site_expr})"
+
+    return [q_spanish, q_site]
+
+
+supplemental = generate_supplemental_queries(query, spec)
+all_queries = [query] + supplemental
+
+# Extend QUERY_TERMS with terms from all queries so Spanish sources score correctly
+for _q in supplemental:
+    QUERY_TERMS.update(t.lower() for t in re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]+", _q) if len(t) >= 4)
+
+print(f"== Discovery ({len(all_queries)} queries) ==")
+all_sources_by_url: dict = {}
+summaries: list = []
+for _q in all_queries:
+    print(f"\n  query: {_q[:100]}")
+    _raw = discover(_q)
+    try:
+        _data = json.loads(_raw)
+    except Exception as e:
+        print(f"  failed to parse discovery JSON: {e}")
+        continue
+    summaries.append(_data.get("summary", ""))
+    for s in _data.get("sources", []):
+        url = s.get("url", "")
+        if url and url not in all_sources_by_url:
+            all_sources_by_url[url] = s
+
+summary = " | ".join(s for s in summaries if s)
+sources = list(all_sources_by_url.values())
+print(f"\n== Fetching and scoring {len(sources)} unique source(s) ==")
 ranked = [fetch_source(s) for s in sources]
 ranked.sort(key=lambda x: x["score"], reverse=True)
-selected = select_diverse_sources(ranked, max_sources=4)
+selected = select_diverse_sources(ranked)
 print("\n== Selected Sources ==")
 for s in selected:
     print(f"- {s['title']} ({s['domain']}) score={s['score']} kind={s['kind']}")
@@ -262,6 +345,7 @@ run_obj = {
     "topic": topic,
     "query_type": query_type,
     "query": query,
+    "all_queries": all_queries,
     "generated_at": now.isoformat(),
     "external_summary": summary,
     "selected_sources": [
