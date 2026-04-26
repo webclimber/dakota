@@ -81,6 +81,8 @@ class MonitorSpec(BaseModel):
     end_date_local: str
     monitor_mode: Literal["quick", "balanced", "deep"] = "balanced"
     check_frequency_minutes: int = 60
+    monitor_style: Literal["breaking_news", "newsletter"] = "breaking_news"
+    publish_cadence: Literal["daily", "weekly", "monthly"] = "weekly"
     delivery: Delivery = Field(default_factory=Delivery)
     importance_thresholds: ImportanceThresholds = Field(default_factory=ImportanceThresholds)
     initial_brief: InitialBrief = Field(default_factory=InitialBrief)
@@ -109,8 +111,8 @@ class MonitorSpec(BaseModel):
     def freq_sane(cls, value: int) -> int:
         if value < 15:
             return 15
-        if value > 1440:
-            return 1440
+        if value > 43200:  # max 30 days (monthly newsletter)
+            return 43200
         return value
 
 
@@ -182,7 +184,7 @@ def build_messages(request: str) -> list[dict[str, str]]:
         "required_output_fields": [
             "monitor_id", "title", "topic", "user_request", "timezone", "created_at",
             "duration_days", "start_date_local", "end_date_local", "monitor_mode",
-            "check_frequency_minutes", "delivery", "importance_thresholds",
+            "check_frequency_minutes", "monitor_style", "publish_cadence", "delivery", "importance_thresholds",
             "initial_brief", "budget", "watch_axes", "breaking_criteria", "query_prompts"
         ]
     }, ensure_ascii=False)
@@ -243,6 +245,16 @@ def normalize_spec(data: dict, request: str) -> dict:
     data.setdefault("end_date_local", end_dt)
     data.setdefault("monitor_mode", defaults.get("monitor_mode", "balanced"))
     data.setdefault("check_frequency_minutes", defaults.get("check_frequency_minutes", 60))
+    data.setdefault("monitor_style", "breaking_news")
+    data.setdefault("publish_cadence", "weekly")
+
+    # [NEWSLETTER] prefix injected by River's start_monitor.py --style newsletter
+    clean_request = request.lstrip()
+    if clean_request.startswith("[NEWSLETTER]"):
+        data["monitor_style"] = "newsletter"
+        cadence = data.get("publish_cadence", "weekly")
+        data["check_frequency_minutes"] = {"daily": 1440, "weekly": 10080, "monthly": 43200}.get(cadence, 10080)
+
     data.setdefault("delivery", {})
     data.setdefault("importance_thresholds", defaults.get("importance_thresholds", {}))
     data.setdefault("initial_brief", defaults.get("initial_brief", {}))

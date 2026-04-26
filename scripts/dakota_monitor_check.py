@@ -10,7 +10,8 @@ from openai import OpenAI
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
-PROMPT_PATH = ROOT / "config" / "prompts" / "monitor_event_prompt.txt"
+BREAKING_NEWS_PROMPT = ROOT / "config" / "prompts" / "monitor_event_prompt.txt"
+NEWSLETTER_PROMPT = ROOT / "config" / "prompts" / "newsletter_event_prompt.txt"
 MODEL = "gpt-5.4-mini"
 client = OpenAI()
 
@@ -58,7 +59,10 @@ prior_events_dir.mkdir(parents=True, exist_ok=True)
 recent_event_files = sorted(prior_events_dir.glob("*-event.json"), reverse=True)[:5]
 recent_events = [json.loads(p.read_text()) for p in recent_event_files]
 
-prompt_template = PROMPT_PATH.read_text()
+monitor_style = spec.get("monitor_style", "breaking_news")
+prompt_file = NEWSLETTER_PROMPT if monitor_style == "newsletter" else BREAKING_NEWS_PROMPT
+print(f"monitor_style: {monitor_style}  prompt: {prompt_file.name}")
+prompt_template = prompt_file.read_text()
 user_payload = {
     "monitor_spec": spec,
     "bootstrap_state": bootstrap_state,

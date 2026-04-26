@@ -36,9 +36,16 @@ Rules:
   - otherwise default to 25 for a short-lived monitor
 - `watch_axes` should be a short list of themes to monitor.
 - `breaking_criteria` should be a short list of concrete triggers.
+- `monitor_style`:
+  - "breaking_news" (default) — recurring alert monitor, conservative delivery
+  - "newsletter" — scheduled magazine-style publication, always publishes on cadence
+  - Set to "newsletter" when the request starts with [NEWSLETTER] or mentions newsletter/weekly digest/publication.
+- `publish_cadence`: "daily" | "weekly" | "monthly" — only relevant when monitor_style is "newsletter".
+  - Default "weekly" for newsletters.
+  - Infer from user request if specified ("daily roundup" → "daily", "monthly brief" → "monthly").
 - `query_prompts`:
   - `bootstrap_query`: a strong initial deep-research question
-  - `monitor_query`: a short recurring-change question
+  - `monitor_query`: a short recurring-change question; for newsletters, write it as a weekly refresh question
   - `digest_query`: a daily summary question
 
 Current local date: {current_date}
