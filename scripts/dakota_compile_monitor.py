@@ -82,7 +82,7 @@ class MonitorSpec(BaseModel):
     monitor_mode: Literal["quick", "balanced", "deep"] = "balanced"
     check_frequency_minutes: int = 60
     monitor_style: Literal["breaking_news", "newsletter"] = "breaking_news"
-    publish_cadence: Literal["daily", "weekly", "monthly"] = "weekly"
+    publish_cadence: Optional[Literal["daily", "weekly", "monthly"]] = None
     delivery: Delivery = Field(default_factory=Delivery)
     importance_thresholds: ImportanceThresholds = Field(default_factory=ImportanceThresholds)
     initial_brief: InitialBrief = Field(default_factory=InitialBrief)
@@ -90,6 +90,7 @@ class MonitorSpec(BaseModel):
     watch_axes: List[str] = Field(default_factory=list)
     breaking_criteria: List[str] = Field(default_factory=list)
     query_prompts: QueryPrompts
+    search_queries: List[str] = Field(default_factory=list)
 
     @field_validator("monitor_id")
     @classmethod
@@ -153,7 +154,7 @@ def stable_topic_from_request(request: str) -> str:
     return "_".join(parts[:4]) or "general_monitor"
 
 
-def build_messages(request: str) -> list[dict[str, str]]:
+def build_messages(request: str, research_context: dict | None = None) -> list[dict[str, str]]:
     now = now_local()
     system_prompt = load_prompt().format(
         current_date=now.strftime("%Y-%m-%d"),
@@ -178,16 +179,29 @@ def build_messages(request: str) -> list[dict[str, str]]:
             "duration_days": duration_days,
         }
     }
-    user_prompt = json.dumps({
+    # Calibrate thresholds from research_context activity_level so model anchors to right defaults
+    if research_context:
+        activity_level = research_context.get("activity_level") or "medium"
+        calibrated = {
+            "high":   {"telegram_breaking_min": 60, "digest_include_min": 25},
+            "medium": {"telegram_breaking_min": 75, "digest_include_min": 35},
+            "low":    {"telegram_breaking_min": 85, "digest_include_min": 50},
+        }.get(activity_level, {"telegram_breaking_min": 75, "digest_include_min": 35})
+        seed["default_importance_thresholds"] = calibrated
+
+    payload: dict = {
         "user_request": request,
         "defaults_and_hints": seed,
         "required_output_fields": [
             "monitor_id", "title", "topic", "user_request", "timezone", "created_at",
             "duration_days", "start_date_local", "end_date_local", "monitor_mode",
             "check_frequency_minutes", "monitor_style", "publish_cadence", "delivery", "importance_thresholds",
-            "initial_brief", "budget", "watch_axes", "breaking_criteria", "query_prompts"
+            "initial_brief", "budget", "watch_axes", "breaking_criteria", "query_prompts", "search_queries"
         ]
-    }, ensure_ascii=False)
+    }
+    if research_context:
+        payload["research_context"] = research_context
+    user_prompt = json.dumps(payload, ensure_ascii=False)
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -212,11 +226,11 @@ def append_usage(query: str, usage: Any) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def call_model(request: str) -> str:
+def call_model(request: str, research_context: dict | None = None) -> str:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     resp = client.responses.create(
         model=MODEL,
-        input=build_messages(request),
+        input=build_messages(request, research_context=research_context),
     )
     usage = getattr(resp, "usage", None)
     if usage:
@@ -246,7 +260,10 @@ def normalize_spec(data: dict, request: str) -> dict:
     data.setdefault("monitor_mode", defaults.get("monitor_mode", "balanced"))
     data.setdefault("check_frequency_minutes", defaults.get("check_frequency_minutes", 60))
     data.setdefault("monitor_style", "breaking_news")
-    data.setdefault("publish_cadence", "weekly")
+    if data.get("monitor_style") == "newsletter":
+        data.setdefault("publish_cadence", "weekly")
+    else:
+        data.setdefault("publish_cadence", None)
 
     # [NEWSLETTER] prefix injected by River's start_monitor.py --style newsletter
     clean_request = request.lstrip()
@@ -276,6 +293,10 @@ def normalize_spec(data: dict, request: str) -> dict:
             "monitor_query": f"What changed for {topic} since the last Dakota run? Focus only on new facts, confirmed changes, and official statements.",
             "digest_query": f"Summarize the meaningful developments for {topic} over the last 24 hours for an email digest. Separate major changes from background noise."
         }
+    if not data.get('search_queries'):
+        title = data.get('title') or data.get('topic', '').replace('_', ' ')
+        data['search_queries'] = [title, f'{title} news', f'{title} 2026']
+
     return data
 
 
@@ -288,19 +309,35 @@ def save_spec(spec: MonitorSpec) -> Path:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print('Usage: python scripts/dakota_compile_monitor.py "your monitor request"')
-        return 1
+    import argparse
+    ap = argparse.ArgumentParser(description="Compile a monitor spec from a natural-language request.")
+    ap.add_argument("request", nargs="+", help="Monitor request string")
+    ap.add_argument("--research-context", dest="research_context", default=None,
+                    help="Path to a JSON file containing pre-compiled research context")
+    args = ap.parse_args()
 
-    request = " ".join(sys.argv[1:]).strip()
+    request = " ".join(args.request).strip()
     if not os.getenv("OPENAI_API_KEY"):
         print("OPENAI_API_KEY is missing in .env")
         return 1
 
+    research_context: dict | None = None
+    if args.research_context:
+        ctx_path = Path(args.research_context)
+        if ctx_path.exists():
+            try:
+                research_context = json.loads(ctx_path.read_text())
+                print(f"== Research context loaded: activity_level={research_context.get('activity_level')}, "
+                      f"facts={len(research_context.get('key_facts', []))} ==")
+            except Exception as e:
+                print(f"Warning: could not load research context ({e}) — proceeding without it")
+        else:
+            print(f"Warning: research context path not found: {ctx_path}")
+
     print("== Request ==")
     print(request)
 
-    raw = call_model(request)
+    raw = call_model(request, research_context=research_context)
     print("\n== Raw Model Output ==")
     print(raw)
 

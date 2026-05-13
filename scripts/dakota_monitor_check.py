@@ -16,12 +16,23 @@ MODEL = "gpt-5.4-mini"
 client = OpenAI()
 
 if len(sys.argv) < 2:
-    print('Usage: python scripts/dakota_monitor_check.py <monitor_spec.json>')
+    print('Usage: python scripts/dakota_monitor_check.py <monitor_spec.json> [--queries JSON]')
     sys.exit(1)
 
 spec_path = Path(sys.argv[1]).expanduser().resolve()
 spec = json.loads(spec_path.read_text())
 monitor_id = spec["monitor_id"]
+
+# Parse optional --queries override (JSON list of query strings from River's rotation)
+active_queries = None
+argv_rest = sys.argv[2:]
+for i, arg in enumerate(argv_rest):
+    if arg == "--queries" and i + 1 < len(argv_rest):
+        try:
+            active_queries = json.loads(argv_rest[i + 1])
+        except Exception as e:
+            print(f"Warning: could not parse --queries arg: {e}")
+        break
 topic = spec["topic"]
 monitor_dir = ROOT / "reports" / "monitors" / monitor_id
 bootstrap_state_path = monitor_dir / "bootstrap_state.json"
@@ -39,6 +50,9 @@ print(f"monitor_dir:{monitor_dir}")
 
 print("\n== Running Dedicated Monitor Research ==")
 cmd = [sys.executable, str(ROOT / "scripts" / "dakota_monitor_research.py"), str(spec_path), "--query-type", "monitor"]
+if active_queries is not None:
+    cmd += ["--queries", json.dumps(active_queries)]
+    print(f"query rotation: {len(active_queries)} queries — {active_queries}")
 proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
 print(proc.stdout)
 if proc.returncode != 0:

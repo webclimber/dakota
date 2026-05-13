@@ -15,11 +15,8 @@ Rules:
   - "next 5 days" means today + 5 days inclusive at the same local time.
   - If no duration is provided, set `duration_days` to 7.
 - For channel routing:
-  - `daily_email.enabled` true if the user asks for email/daily summary/digest.
-  - `telegram_breaking.enabled` true if the user asks for Telegram/breaking/immediate alerts.
-- For `importance_thresholds`:
-  - telegram_breaking_min defaults to 85
-  - digest_include_min defaults to 55
+  - `daily_email.enabled` defaults to `true` — set to `false` only if the user explicitly asks for no email or Telegram-only.
+  - `telegram_breaking.enabled` true only if the user asks for Telegram/breaking/immediate alerts.
 - `monitor_mode` should be one of: quick, balanced, deep
   - quick for light checks
   - balanced by default
@@ -34,8 +31,8 @@ Rules:
 - `budget.max_external_spend_usd`:
   - if user specifies a budget, use it
   - otherwise default to 25 for a short-lived monitor
-- `watch_axes` should be a short list of themes to monitor.
-- `breaking_criteria` should be a short list of concrete triggers.
+- `watch_axes` should be a specific list of themes to monitor — NOT generic. Use what you know about the topic.
+- `breaking_criteria` should be a specific list of concrete triggers — NOT generic. Think about what actually matters for this topic.
 - `monitor_style`:
   - "breaking_news" (default) — recurring alert monitor, conservative delivery
   - "newsletter" — scheduled magazine-style publication, always publishes on cadence
@@ -48,5 +45,47 @@ Rules:
   - `monitor_query`: a short recurring-change question; for newsletters, write it as a weekly refresh question
   - `digest_query`: a daily summary question
 
+## Using research_context (when provided)
+
+If the input includes a `research_context` field, it contains live research about the topic conducted
+just before this compile step. Use it to produce a grounded, specific spec instead of generic defaults.
+
+**watch_axes**: Use `research_context.suggested_watch_axes` as a starting point. Refine based on
+`key_facts` and `key_entities`. These should be specific to this topic's actual state, not boilerplate.
+
+**breaking_criteria**: Use `research_context.suggested_breaking_criteria`. Add any criteria implied
+by `key_facts` that the model may have missed. For live proceedings (trials, elections, hearings),
+include testimony, rulings, verdicts, and procedural milestones.
+
+**query_prompts**: Incorporate `current_state` into the `bootstrap_query` and `monitor_query` so
+Dakota starts from the right baseline.
+
+**importance_thresholds**: Calibrate based on `activity_level`:
+  - "high" (active trial, live election, breaking story): digest_include_min 20–30, telegram_breaking_min 55–65
+  - "medium" (ongoing investigation, slow-moving legal case, weekly developments): digest_include_min 30–40, telegram_breaking_min 70–80
+  - "low" (background watching, months between changes): digest_include_min 45–55, telegram_breaking_min 80–90
+
+When in doubt, err toward lower thresholds — missed relevant news is worse than occasional over-delivery.
+
 Current local date: {current_date}
 Current local time: {current_time}
+## search_queries
+
+`search_queries` is a list of 2-4 short, broad search strings to send to Brave for article retrieval.
+
+These are for **retrieval only** -- think of what you would type into a search engine to surface any
+relevant news about this topic. Keep them short and topic-level. No question marks. No analytical
+framing like "what changed". The LLM will do the analysis -- Brave just needs to find the articles.
+
+Do NOT reuse `monitor_query` here. That is an analytical question for the LLM, not a search string.
+
+Good examples:
+- Gavin Newsom politics monitor: ["Gavin Newsom news", "Newsom California governor", "Newsom 2028"]
+- EU App Store monitor: ["Apple App Store EU DMA", "EU Apple antitrust 2026", "Apple Europe regulation news"]
+- Musk Altman trial: ["Musk Altman OpenAI lawsuit", "OpenAI trial 2026", "Elon Musk OpenAI court"]
+
+Rules:
+- First query: the subject's name / core noun phrase -- broadest possible
+- Second query: subject + domain/context (policy, legal, financial, political, etc.)
+- Third query (optional): subject + recency signal or secondary angle
+- Aim for variety across queries, not repetition -- each query should surface different articles

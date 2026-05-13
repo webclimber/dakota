@@ -23,10 +23,24 @@ if len(sys.argv) < 2:
 
 spec_path = Path(sys.argv[1]).expanduser().resolve()
 query_type = "monitor"
-if len(sys.argv) >= 4 and sys.argv[2] == "--query-type":
-    query_type = sys.argv[3]
-elif len(sys.argv) == 3 and sys.argv[2].startswith("--query-type="):
-    query_type = sys.argv[2].split("=", 1)[1]
+active_queries_override = None
+argv_rest = sys.argv[2:]
+i = 0
+while i < len(argv_rest):
+    if argv_rest[i] == "--query-type" and i + 1 < len(argv_rest):
+        query_type = argv_rest[i + 1]
+        i += 2
+    elif argv_rest[i].startswith("--query-type="):
+        query_type = argv_rest[i].split("=", 1)[1]
+        i += 1
+    elif argv_rest[i] == "--queries" and i + 1 < len(argv_rest):
+        try:
+            active_queries_override = json.loads(argv_rest[i + 1])
+        except Exception as e:
+            print(f"Warning: could not parse --queries: {e}")
+        i += 2
+    else:
+        i += 1
 
 spec = json.loads(spec_path.read_text())
 monitor_id = spec["monitor_id"]
@@ -228,11 +242,13 @@ def generate_supplemental_queries(main_query: str, spec: dict) -> list:
     return [q_spanish, q_site]
 
 
+search_queries = active_queries_override if active_queries_override is not None else (spec.get("search_queries") or [])
 supplemental = generate_supplemental_queries(query, spec)
-all_queries = [query] + supplemental
+base_queries = search_queries if search_queries else [query]
+all_queries = base_queries + [q for q in supplemental if q not in base_queries]
 
-# Extend QUERY_TERMS with terms from all queries so Spanish sources score correctly
-for _q in supplemental:
+# Extend QUERY_TERMS with terms from all search queries so sources score correctly
+for _q in all_queries:
     QUERY_TERMS.update(t.lower() for t in re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]+", _q) if len(t) >= 4)
 
 print(f"== Discovery ({len(all_queries)} queries) ==")

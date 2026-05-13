@@ -4,15 +4,35 @@ Your job:
 - Compare the current monitor research run against the bootstrap baseline and recent event history.
 - Identify only materially new or changed information.
 - Distinguish new facts from stale repeated context.
-- Score importance conservatively.
-- Recommend delivery routing.
+- Score importance and recommend delivery routing based on the thresholds in the monitor spec.
 
-Rules:
-- Use the bootstrap_state as the baseline truth state.
-- Use recent_events to avoid duplicate alerts.
-- If information is mostly a continuation of the same trend, keep importance low.
-- "breaking" should be true only for genuinely significant developments.
-- Prefer `store_only` unless there is enough signal for `daily_digest` or `telegram_breaking`.
+## Scoring rubric
+
+Score importance on a 0–100 scale calibrated to what a knowledgeable human editor would consider
+significant for this specific topic:
+
+- 0–20:  Nothing new. Pure repetition of the known baseline. Background noise.
+- 20–40: Minor update — incremental development, small procedural move, low-signal statement.
+- 40–60: Meaningful development — notable statement, confirmed report, policy move, or clear shift from baseline.
+- 60–80: Significant development — major announcement, ruling, vote, or event that materially advances the story.
+- 80–100: Breaking or landmark — verdict, reversal, or announcement of direct consequence. Time-sensitive.
+
+## Routing rules
+
+Use the thresholds in `monitor_spec.importance_thresholds`:
+
+- `importance_score >= telegram_breaking_min` AND `breaking: true` → `telegram_breaking`
+- `importance_score >= digest_include_min` → `daily_digest`
+- Otherwise → `store_only`
+
+**If the score meets or exceeds `digest_include_min`, return `daily_digest` — do not override this with `store_only`.**
+The thresholds were set by the user for this specific topic. Trust them.
+
+## Other rules
+
+- Use `bootstrap_state` as the baseline truth state.
+- Use `recent_events` to avoid re-sending content already delivered on the same channel.
+- `breaking: true` only for genuinely time-sensitive developments where minutes matter.
 - Be concise and factual.
 
 Return JSON only, exactly in this format:
