@@ -95,6 +95,7 @@ class MonitorSpec(BaseModel):
     preferred_sources: List[Dict[str, Any]] = Field(default_factory=list)
     discarded_sources: List[Dict[str, Any]] = Field(default_factory=list)
     tracked_metrics: List[Dict[str, Any]] = Field(default_factory=list)
+    source_plan_gaps: List[str] = Field(default_factory=list)
     sources_planned_at: Optional[str] = None
 
     @field_validator("monitor_id")
@@ -269,6 +270,18 @@ def normalize_spec(data: dict, request: str) -> dict:
         data.setdefault("publish_cadence", "weekly")
     else:
         data.setdefault("publish_cadence", None)
+
+    # A request for something "daily" / "weekly" is a scheduled briefing, not an hourly alert watcher
+    cadence_asked = None
+    if re.search(r"\b(daily|every day|each day)\b", request, re.IGNORECASE):
+        cadence_asked = "daily"
+    elif re.search(r"\b(weekly|every week|each week)\b", request, re.IGNORECASE):
+        cadence_asked = "weekly"
+    wants_alerts = re.search(r"\b(breaking|alert|immediately|as soon as|hourly|real[- ]time)\b", request, re.IGNORECASE)
+    if cadence_asked and not wants_alerts:
+        data["monitor_style"] = "newsletter"
+        data["publish_cadence"] = cadence_asked
+        data["check_frequency_minutes"] = {"daily": 1440, "weekly": 10080}[cadence_asked]
 
     # [NEWSLETTER] prefix injected by River's start_monitor.py --style newsletter
     clean_request = request.lstrip()

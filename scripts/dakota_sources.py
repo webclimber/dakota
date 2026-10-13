@@ -309,17 +309,30 @@ Title: {spec.get("title", "")}
 Watch axes: {json.dumps(spec.get("watch_axes") or [], ensure_ascii=False)}
 Cadence: {spec.get("publish_cadence") or "recurring"} (runs every {spec.get("check_frequency_minutes")} minutes)
 
-Task 1 — sources. Name the 10 to 14 best PRIMARY sources that publish the data this request needs and
-that are updated often enough for this cadence. Think like a specialist in this field: who originates
-the numbers, ratings, rulings, filings or announcements — not who writes about them second-hand.
-Use web search to confirm each URL exists today and points at the specific page carrying the data
-(a ratings table, a forecast page, a tracker, an API endpoint returning JSON), not a homepage.
-Include sources you expect to be paywalled or JavaScript-only if they are among the best — they will
-be tested and reported to the reader either way. Do not include encyclopedias or explainer pages
-unless they carry a maintained data table that nothing else provides.
+Task 1 — sources. Name the 12 to 16 best sources for this request that are updated often enough for
+this cadence. Think like a specialist who follows this beat every day. Cover every kind that applies:
+- Originators of data: whoever publishes the numbers, ratings, forecasts, rulings, filings or
+  official announcements (a ratings table, a tracker, a results page, an API endpoint returning JSON).
+- Independent reporting: for anything driven by events and politics, the leading independent news
+  outlets on this beat ARE primary sources — their dedicated section or tag page for the topic, in
+  every language the reader accepts. Wire services and specialist outlets before general ones.
+- Probabilities: if the reader asks about odds or likelihood, include prediction markets and
+  forecasters that publish a number for it (for Polymarket use
+  https://gamma-api.polymarket.com/public-search?q=<terms>&limit_per_type=5), plus pollsters.
+- Independent monitors: NGOs, academic trackers, multilateral bodies.
+Balance: where the topic has opposing sides, no side's official channels may make up more than a
+quarter of the list, and each side that publishes gets represented. Government and party feeds are
+sources for what that side claims, not for what is true.
+Use web search to confirm each URL exists today and points at the specific page carrying the
+content, not a homepage. Include sources you expect to be paywalled or JavaScript-only if they are
+among the best — they will be tested and reported to the reader either way. Do not include
+encyclopedias or explainer pages unless they carry a maintained data table nothing else provides.
 
 Task 2 — tracked metrics. Name 3 to 8 values the reader wants to see every issue and compare with the
-previous issue. Each must be something the sources above actually publish. Name the source in the
+previous issue — start from what the reader literally asked for. A metric is ONE value or one short status that fits in a table cell (a number, a date, a rating,
+a count, a yes/no with a date) — never a topic area or a bundle of things to track.
+Each must be something the sources
+above actually publish; list those sources' URLs in the metric's source_urls. Name the source in the
 metric name when different sources publish different values for the same thing.
 
 Return JSON only:
@@ -329,7 +342,7 @@ Return JSON only:
       "update_cadence": "daily|weekly|irregular", "access_expectation": "open|paywalled|javascript"}}
   ],
   "tracked_metrics": [
-    {{"name": "...", "description": "what it is and which source publishes it"}}
+    {{"name": "...", "description": "what it is and which source publishes it", "source_urls": ["https://..."]}}
   ]
 }}
 """
@@ -370,17 +383,93 @@ def validate_sources(candidates: list, spec: dict) -> tuple[list, list]:
     return usable, discarded
 
 
+def propose_gap_fill(spec: dict, usable: list, discarded: list, metrics: list) -> tuple[dict, dict]:
+    """Second planning round: review what survived testing against the request and find replacements."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    prompt = f"""You are reviewing the source plan for a recurring research monitor after every source was
+tested. Today is {today}.
+
+Monitor request:
+{spec.get("user_request", "")}
+
+Watch axes: {json.dumps(spec.get("watch_axes") or [], ensure_ascii=False)}
+
+SOURCES THAT WORK (will be read every run):
+{json.dumps([{k: s.get(k) for k in ("title", "url", "provides")} for s in usable], ensure_ascii=False, indent=1)}
+
+SOURCES THAT FAILED (cannot be used):
+{json.dumps([{k: s.get(k) for k in ("title", "url", "provides", "reason")} for s in discarded], ensure_ascii=False, indent=1)}
+
+TRACKED METRICS so far:
+{json.dumps(metrics, ensure_ascii=False, indent=1)}
+
+Judge the working list against the request, as the reader would:
+- Is every part of the request covered by at least one working source? Name what is not.
+- Is there enough independent, frequently updated reporting, in every language the reader accepts?
+- Where the topic has opposing sides, is each side that publishes represented, with no side's
+  official channels dominating?
+- If the reader asked about probabilities or odds, is there a working source that publishes a number?
+- Is each failed source's role now uncovered?
+
+Then find replacements with web search: for each gap, a different page or a different publisher that
+carries the same kind of content and is likely to be readable by a plain HTTP fetch (no login, not
+JavaScript-only) — for example an RSS/Atom feed, a tag or section page, an official Telegram web
+preview (https://t.me/s/<channel>), an API endpoint, or a comparable outlet. Do not repeat any URL
+listed above. Up to 10 additions; none if the plan is already complete.
+
+Also revise the tracked metrics so each one can be filled from a working or newly proposed source,
+starting from what the reader literally asked for (3 to 8 metrics, each with source_urls).
+A metric is ONE value or one short status that fits in a table cell (a number, a date, a rating,
+a count, a yes/no with a date) — never a topic area or a bundle of things to track.
+
+Return JSON only:
+{{
+  "gaps": ["what the working list does not cover"],
+  "sources": [
+    {{"title": "...", "url": "https://...", "provides": "...", "update_cadence": "daily|weekly|irregular",
+      "fills_gap": "..."}}
+  ],
+  "tracked_metrics": [
+    {{"name": "...", "description": "...", "source_urls": ["https://..."]}}
+  ]
+}}
+"""
+    return json_call(PLANNER_MODEL, prompt, "openai_monitor_source_gapfill", spec.get("monitor_id", ""), web_search=True)
+
+
 def plan_sources(spec: dict) -> dict:
-    """Propose + validate. Returns the three spec fields to merge in."""
+    """Propose, test, then review the survivors and fill gaps. Returns the spec fields to merge in."""
     data, _usage = propose_sources(spec)
     candidates = data.get("sources") or []
     metrics = [m for m in (data.get("tracked_metrics") or []) if isinstance(m, dict) and m.get("name")]
     # extraction during validation should already know the metrics it is looking for
     usable, discarded = validate_sources(candidates, {**spec, "tracked_metrics": metrics})
+
+    gaps: list = []
+    try:
+        review, _usage = propose_gap_fill(spec, usable, discarded, metrics)
+        gaps = [g for g in (review.get("gaps") or []) if g]
+        revised = [m for m in (review.get("tracked_metrics") or []) if isinstance(m, dict) and m.get("name")]
+        if revised:
+            metrics = revised
+        seen = {s["url"] for s in usable + discarded}
+        extra = [c for c in (review.get("sources") or []) if c.get("url") and c["url"] not in seen]
+        if extra:
+            more_ok, more_bad = validate_sources(extra, {**spec, "tracked_metrics": metrics})
+            usable += more_ok
+            discarded += more_bad
+    except Exception as e:
+        print(f"gap-fill round skipped: {e}")
+
+    # A metric whose every source failed validation can never be filled in — drop it
+    usable_urls = {s["url"] for s in usable}
+    metrics = [m for m in metrics
+               if not m.get("source_urls") or any(u in usable_urls for u in m["source_urls"])]
     return {
         "preferred_sources": usable,
         "discarded_sources": discarded,
         "tracked_metrics": metrics,
+        "source_plan_gaps": gaps,
         "sources_planned_at": datetime.now().isoformat(timespec="seconds"),
     }
 
