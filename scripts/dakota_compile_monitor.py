@@ -19,7 +19,7 @@ DEFAULTS_PATH = ROOT / "config" / "monitor_defaults.json"
 
 load_dotenv(ROOT / ".env")
 
-MODEL = os.getenv("DAKOTA_PLANNER_MODEL", "gpt-5.4-mini")
+MODEL = os.getenv("DAKOTA_PLANNER_MODEL", "gpt-5.6-terra")
 TIMEZONE_DEFAULT = "America/Los_Angeles"
 
 
@@ -91,6 +91,11 @@ class MonitorSpec(BaseModel):
     breaking_criteria: List[str] = Field(default_factory=list)
     query_prompts: QueryPrompts
     search_queries: List[str] = Field(default_factory=list)
+    # Filled in by dakota_sources.plan_sources() after the spec is compiled
+    preferred_sources: List[Dict[str, Any]] = Field(default_factory=list)
+    discarded_sources: List[Dict[str, Any]] = Field(default_factory=list)
+    tracked_metrics: List[Dict[str, Any]] = Field(default_factory=list)
+    sources_planned_at: Optional[str] = None
 
     @field_validator("monitor_id")
     @classmethod
@@ -355,6 +360,18 @@ def main() -> int:
         print("\nValidation failed:")
         print(e)
         return 1
+
+    # Pick and test the primary sources for this topic. Never fatal: without them the monitor
+    # still runs on search results alone.
+    try:
+        sys.path.append(str(Path(__file__).resolve().parent))
+        from dakota_sources import plan_sources
+        plan = plan_sources(json.loads(spec.model_dump_json()))
+        spec = spec.model_copy(update=plan)
+        print(f"\n== Source plan: {len(plan['preferred_sources'])} usable, "
+              f"{len(plan['discarded_sources'])} discarded, {len(plan['tracked_metrics'])} tracked metrics ==")
+    except Exception as e:
+        print(f"\nWarning: source planning failed ({e}) — continuing without preferred sources")
 
     path = save_spec(spec)
 

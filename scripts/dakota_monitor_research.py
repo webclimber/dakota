@@ -6,14 +6,13 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
-import trafilatura
 import chromadb
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 
 sys.path.append(str(Path(__file__).resolve().parent))
 from dakota_discovery import discover
+from dakota_sources import fetch_and_extract_many, days_old
 
 load_dotenv()
 
@@ -58,131 +57,18 @@ if not query:
 
 now = datetime.now()
 run_id = now.strftime('run-%Y%m%d-%H%M%S')
-MODEL = os.environ.get("OLLAMA_SUMMARIZE_MODEL", "qwen3:32b")
+MODEL = os.environ.get("OLLAMA_SUMMARIZE_MODEL", "qwen3.6:35b")
+DISCOVERY_MODEL = os.environ.get("DAKOTA_MONITOR_DISCOVERY_MODEL", "gpt-5.6-luna")
+MONITOR_STYLE = spec.get("monitor_style", "breaking_news")
+# How far back a search result may be dated and still count as news for this cadence
+RECENCY_DAYS = {"daily": 3, "weekly": 9, "monthly": 35}.get(spec.get("publish_cadence") or "", 3)
+MAX_DISCOVERED_FETCH = 14
+MAX_DISCOVERED_SELECTED = 6
+MAX_DISCOVERED_AGE_DAYS = max(7, RECENCY_DAYS * 3)
 QUERY_TERMS = {t.lower() for t in re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]+", query) if len(t) >= 4}
 
-llm = ChatOllama(model=MODEL)
 client = chromadb.PersistentClient(path="chroma")
 col = client.get_or_create_collection("dakota_runs")
-
-
-def detect_kind(url: str, content_type: str, text: str) -> str:
-    u = url.lower()
-    ct = (content_type or "").lower()
-    if ".pdf" in u or "pdf" in ct:
-        return "pdf"
-    if len(text) < 400:
-        return "thin"
-    path = urlparse(url).path.strip("/").split("/")
-    if len(path) <= 1:
-        return "homepage"
-    if any(seg in {"politica", "politics", "world", "americas", "news", "section", "tag", "tags", "category"} for seg in path):
-        return "section"
-    return "article"
-
-
-def fetch_source(source: dict) -> dict:
-    title = source.get("title", "").strip()
-    url = source.get("url", "").strip()
-    result = {
-        "title": title,
-        "url": url,
-        "final_url": url,
-        "status_code": None,
-        "content_type": "",
-        "domain": urlparse(url).netloc,
-        "text": "",
-        "text_len": 0,
-        "kind": "unknown",
-        "freshness_hint": "",
-        "score": 0,
-        "notes": [],
-        "fetch_ok": False,
-        "source_type": source.get("source_type", "unknown"),
-    }
-    try:
-        r = httpx.get(url, timeout=20, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 DakotaResearch/1.0"})
-        result["status_code"] = r.status_code
-        result["final_url"] = str(r.url)
-        result["domain"] = urlparse(str(r.url)).netloc
-        result["content_type"] = r.headers.get("content-type", "")
-        result["freshness_hint"] = r.headers.get("last-modified", "") or r.headers.get("date", "")
-        r.raise_for_status()
-        extracted = trafilatura.extract(r.text, url=str(r.url), include_comments=False, include_tables=False)
-        text = (extracted or "").strip()
-        result["text"] = text[:4000]
-        result["text_len"] = len(text)
-        result["fetch_ok"] = True
-        result["kind"] = detect_kind(str(r.url), result["content_type"], text)
-    except Exception as e:
-        result["notes"].append(f"fetch failed: {e}")
-        return result
-
-    score = 10
-    if result["text_len"] >= 3000:
-        score += 25; result["notes"].append("rich text")
-    elif result["text_len"] >= 1200:
-        score += 18; result["notes"].append("good text")
-    elif result["text_len"] >= 500:
-        score += 10; result["notes"].append("some text")
-    else:
-        score -= 10; result["notes"].append("thin text")
-
-    hay = f"{title}\n{result['text']}".lower()
-    overlap = sum(1 for t in QUERY_TERMS if t in hay)
-    score += min(overlap * 4, 24)
-    result["notes"].append(f"term overlap={overlap}")
-
-    kind = result["kind"]
-    if kind == "article":
-        score += 15; result["notes"].append("article-like")
-    elif kind == "pdf":
-        score += 6; result["notes"].append("pdf")
-    elif kind == "section":
-        score -= 8; result["notes"].append("section-like")
-    elif kind == "homepage":
-        score -= 15; result["notes"].append("homepage-like")
-    elif kind == "thin":
-        score -= 12; result["notes"].append("thin page")
-
-    domain = result["domain"].lower()
-    trusted_news = (
-        "apnews.com", "reuters.com", "bbc.com", "abcnews.go.com", "abcnews.com",
-        "elpais.com", "elmundo.es", "abc.es", "lavanguardia.com", "elperiodico.com",
-        "elcomercio.pe", "rpp.pe", "theguardian.com", "aljazeera.com",
-        "sur.es", "surinenglish.com", "laopiniondemalaga.es", "malagahoy.es",
-        "marbella24.com", "diariodecadiz.es", "diariodesevilla.es",
-        "granadahoy.com", "ideal.es", "lavozdealmeria.es",
-    )
-    official = (".gob.pe", ".gov", ".org")
-    if any(d in domain for d in trusted_news):
-        score += 12; result["notes"].append("trusted news")
-    if any(domain.endswith(sfx) or sfx in domain for sfx in official):
-        score += 8; result["notes"].append("official/org")
-
-    fresh_text = f"{result['final_url']} {title} {result['freshness_hint']}".lower()
-    if any(y in fresh_text for y in ["2026", "2025"]):
-        score += 6; result["notes"].append("recent hint")
-
-    result["score"] = score
-    return result
-
-
-def select_diverse_sources(ranked: list, max_sources: int = 6) -> list:
-    selected = []
-    domain_counts = {}
-    for item in ranked:
-        if not item["fetch_ok"] or item["text_len"] < 500:
-            continue
-        domain = item["domain"]
-        count = domain_counts.get(domain, 0)
-        if count >= 2:
-            continue
-        selected.append(item)
-        domain_counts[domain] = count + 1
-        if len(selected) >= max_sources:
-            break
-    return selected
 
 
 _SPANISH_LOCAL_DOMAINS = {
@@ -251,12 +137,13 @@ all_queries = base_queries + [q for q in supplemental if q not in base_queries]
 for _q in all_queries:
     QUERY_TERMS.update(t.lower() for t in re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]+", _q) if len(t) >= 4)
 
-print(f"== Discovery ({len(all_queries)} queries) ==")
+
+print(f"== Discovery ({len(all_queries)} queries, last {RECENCY_DAYS} days) ==")
 all_sources_by_url: dict = {}
 summaries: list = []
 for _q in all_queries:
     print(f"\n  query: {_q[:100]}")
-    _raw = discover(_q)
+    _raw = discover(_q, recency_days=RECENCY_DAYS, model=DISCOVERY_MODEL)
     try:
         _data = json.loads(_raw)
     except Exception as e:
@@ -269,23 +156,78 @@ for _q in all_queries:
             all_sources_by_url[url] = s
 
 summary = " | ".join(s for s in summaries if s)
-sources = list(all_sources_by_url.values())
-print(f"\n== Fetching and scoring {len(sources)} unique source(s) ==")
-ranked = [fetch_source(s) for s in sources]
-ranked.sort(key=lambda x: x["score"], reverse=True)
-selected = select_diverse_sources(ranked)
+
+# Preferred sources (picked and validated when the monitor was created) are read every run;
+# search results only supplement them with news.
+preferred = spec.get("preferred_sources") or []
+preferred_urls = {p["url"] for p in preferred}
+preferred_domains = {urlparse(p["url"]).netloc for p in preferred}
+discovered = [s for u, s in all_sources_by_url.items() if u not in preferred_urls][:MAX_DISCOVERED_FETCH]
+
+print(f"\n== Reading {len(preferred)} preferred + {len(discovered)} discovered source(s) ==")
+pref_results = fetch_and_extract_many(preferred, spec)
+disc_results = fetch_and_extract_many(discovered, spec)
+
+selected: list = []
+discarded: list = []
+for p, r in zip(preferred, pref_results):
+    r["preferred"] = True
+    r["provides"] = p.get("provides", "")
+    r["source_type"] = "preferred"
+    (selected if r["ok"] else discarded).append(r)
+
+usable_discovered = []
+for s, r in zip(discovered, disc_results):
+    r["preferred"] = False
+    r["provides"] = ""
+    r["source_type"] = s.get("source_type", "unknown")
+    age = days_old(r["latest_date"], now)
+    if r["ok"] and age is not None and age > MAX_DISCOVERED_AGE_DAYS:
+        r["ok"] = False
+        r["reason"] = f"not recent — newest date on the page is {r['latest_date']}"
+    (usable_discovered if r["ok"] else discarded).append(r)
+
+# Newest first; undated pages last. At most 2 per domain, counting preferred sources.
+usable_discovered.sort(key=lambda r: (days_old(r["latest_date"], now) is None,
+                                      days_old(r["latest_date"], now) or 0, -len(r["facts"])))
+domain_counts = {d: 2 for d in preferred_domains}
+for r in usable_discovered:
+    if len([x for x in selected if not x["preferred"]]) >= MAX_DISCOVERED_SELECTED:
+        break
+    if domain_counts.get(r["domain"], 0) >= 2:
+        continue
+    domain_counts[r["domain"]] = domain_counts.get(r["domain"], 0) + 1
+    selected.append(r)
+
 print("\n== Selected Sources ==")
 for s in selected:
-    print(f"- {s['title']} ({s['domain']}) score={s['score']} kind={s['kind']}")
+    print(f"- {'[preferred] ' if s['preferred'] else ''}{s['title']} ({s['domain']}) newest={s['latest_date']} facts={len(s['facts'])}")
+print("\n== Could Not Use ==")
+for s in discarded:
+    print(f"- {'[preferred] ' if s['preferred'] else ''}{s['title']} ({s['domain']}): {s['reason']}")
+
+extract_usage = [r["usage"] for r in pref_results + disc_results if r.get("usage")]
 
 sources_text = "\n".join([f"- {s['title']} ({s['final_url']})" for s in selected])
-fetched_text = "\n\n====================\n\n".join([f"Title: {s['title']}\nURL: {s['final_url']}\n\n{s['text']}" for s in selected])
+
+
+def _facts_block(s: dict) -> str:
+    rows = [f"  - {f['fact']}" + (f" [{f['date']}]" if f.get("date") else "") for f in s["facts"]]
+    rows += [f"  - {m['name']}: {m.get('value')}" + (f" [{m['as_of']}]" if m.get("as_of") else "") for m in s["metrics"]]
+    return f"Title: {s['title']}\nURL: {s['final_url']}\nNewest date on page: {s['latest_date']}\n" + "\n".join(rows)
+
+
+fetched_text = "\n\n====================\n\n".join(_facts_block(s) for s in selected)
 
 memory = col.query(query_texts=[query], n_results=3, where={"topic": topic})
 memory_docs = memory.get("documents", [[]])[0] or []
 memory_text = "\n\n---\n\n".join(memory_docs) if memory_docs else "None"
 
-prompt = f"""
+# Newsletter issues are written from the per-source facts directly (dakota_monitor_check.py);
+# the local-model synthesis is only used by breaking-news monitors' "Research Notes".
+analysis_text = ""
+if MONITOR_STYLE != "newsletter":
+    prompt = f"""
 You are a research assistant focused on recurring topic monitoring.
 
 Topic:
@@ -300,19 +242,17 @@ Query Type:
 Question:
 {query}
 
-External summary:
-{summary}
-
 Selected sources:
 {sources_text}
 
-Fetched source text:
+Facts extracted from each source today:
 {fetched_text}
 
-Previous memory for this topic:
+Previous memory for this topic (background only — may be out of date):
 {memory_text}
 
-Write a concise but useful answer grounded in the selected sources.
+Write a concise but useful answer grounded only in the facts extracted today.
+Do not state anything the extracted facts do not support.
 
 Return exactly this structure:
 
@@ -328,9 +268,9 @@ Open questions:
 - ...
 - ...
 """
-
-resp = llm.invoke(prompt)
-analysis_text = resp.content.strip()
+    llm = ChatOllama(model=MODEL, reasoning=False)
+    resp = llm.invoke(prompt)
+    analysis_text = resp.content.strip()
 
 art_dir = Path("reports") / "monitors" / monitor_id / "runs"
 art_dir.mkdir(parents=True, exist_ok=True)
@@ -356,18 +296,29 @@ for line in analysis_text.splitlines():
         analysis[section].append(t.lstrip("- ").strip())
 analysis["executive_summary"] = analysis["executive_summary"].strip()
 
+SOURCE_KEYS = ["title", "final_url", "domain", "source_type", "text_len", "preferred", "provides",
+               "latest_date", "facts", "metrics"]
 run_obj = {
     "monitor_id": monitor_id,
     "topic": topic,
     "query_type": query_type,
     "query": query,
     "all_queries": all_queries,
+    "recency_days": RECENCY_DAYS,
     "generated_at": now.isoformat(),
     "external_summary": summary,
-    "selected_sources": [
-        {k: s[k] for k in ["title", "final_url", "domain", "score", "kind", "source_type", "text_len"]}
-        for s in selected
+    "selected_sources": [{k: s[k] for k in SOURCE_KEYS} for s in selected],
+    "discarded_sources": [
+        {"title": s["title"], "url": s["url"], "domain": s["domain"], "preferred": s["preferred"], "reason": s["reason"]}
+        for s in discarded
     ],
+    "extract_usage": {
+        "model": extract_usage[0]["model"] if extract_usage else None,
+        "calls": len(extract_usage),
+        "input_tokens": sum(u["input_tokens"] for u in extract_usage),
+        "output_tokens": sum(u["output_tokens"] for u in extract_usage),
+        "total_tokens": sum(u["total_tokens"] for u in extract_usage),
+    },
     "retrieved_memory": memory_docs,
     "analysis": analysis,
     "analysis_text": analysis_text,
@@ -386,14 +337,13 @@ with open(md_path, "w") as f:
     f.write(f"## External Summary\n{summary}\n\n")
     f.write("## Selected Sources\n")
     for s in selected:
-        f.write(f"- {s['title']} ({s['final_url']}) score={s['score']} kind={s['kind']}\n")
-    f.write("\n## Retrieved Memory\n")
-    if memory_docs:
-        for i, m in enumerate(memory_docs, 1):
-            f.write(f"### Memory {i}\n{m}\n\n")
-    else:
-        f.write("None\n\n")
-    f.write("## Analysis\n")
+        f.write(f"- {s['title']} ({s['final_url']}) newest={s['latest_date']} facts={len(s['facts'])}\n")
+    f.write("\n## Could Not Use\n")
+    for s in discarded:
+        f.write(f"- {s['title']} ({s['url']}): {s['reason']}\n")
+    f.write("\n## Extracted Facts\n")
+    f.write(fetched_text + "\n")
+    f.write("\n## Analysis\n")
     f.write(analysis_text + "\n")
 print(f"\n== JSON Run ==\n{json_path}")
 print(f"\n== Markdown Report ==\n{md_path}")
